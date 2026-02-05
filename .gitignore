@@ -1,4 +1,5 @@
 # Ignore secrets and local files
 .env
 __pycache__/
-*.pyc
+*.pyc.env 
+__pycache__/ 
