@@ -5,6 +5,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from pycoingecko import CoinGeckoAPI
 from openai import OpenAI
 from moralis import evm_api
+from telegram import ReplyKeyboardMarkup, KeyboardButton
 
 # Load environment variables
 load_dotenv()
@@ -28,17 +29,33 @@ if not MORALIS_API_KEY:
 # Initialize CoinGecko
 cg = CoinGeckoAPI()
 
+from telegram import ReplyKeyboardMarkup, KeyboardButton  # Make sure this import is at the top
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Grouped rows — 2 buttons per row for clean look
+    keyboard = [
+        # Row 1: Core analysis tools
+        [KeyboardButton("/price"), KeyboardButton("/scan")],
+        
+        # Row 2: Portfolio & discovery
+        [KeyboardButton("/portfolio"), KeyboardButton("/trending")],
+        
+        # Row 3: Signals & help
+        [KeyboardButton("/signals"), KeyboardButton("/help")]
+    ]
+
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,           # Buttons scale nicely on mobile
+        one_time_keyboard=False,        # Menu stays visible (persistent)
+        input_field_placeholder="Ask anything or tap a command..."  # Nice UX touch
+    )
+
     await update.message.reply_text(
-        "Welcome to Cyntel AI 🚀\n\n"
-        "Available commands:\n"
-        "/price <ticker> — get current price & 24h change\n"
-        "/trending — discover top movers\n"
-        "/scan <ticker> — deep analysis with AI insights\n"
-        "/portfolio <wallet> — track Base wallet holdings\n"
-        "/signals <ticker> — AI trading signals (entry/target/stop)\n"
-        "/help — show this message\n\n"
-        "Example: /price bitcoin or /portfolio 0x1234...abcd"
+        "Welcome to Cyntel AI — real-time crypto intelligence.\n"
+        "No hype. No cope. Just data and straight talk.\n\n"
+        "Quick access buttons below — or type anything to chat:",
+        reply_markup=reply_markup
     )
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,6 +244,7 @@ async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Trending fetch failed: {str(e)}")
 
 async def signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if not context.args:
         await update.message.reply_text("Please provide a ticker.\nExample: /signals bitcoin")
         return
