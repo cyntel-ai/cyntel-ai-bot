@@ -36,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/trending — discover top movers\n"
         "/scan <ticker> — deep analysis with AI insights\n"
         "/portfolio <wallet> — track Base wallet holdings\n"
+        "/signals <ticker> — AI trading signals (entry/target/stop)\n"
         "/help — show this message\n\n"
         "Example: /price bitcoin or /portfolio 0x1234...abcd"
     )
@@ -225,6 +226,70 @@ async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Trending fetch failed: {str(e)}")
 
+async def signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Please provide a ticker.\nExample: /signals bitcoin")
+        return
+
+    ticker = context.args[0].lower()
+    await update.message.reply_text("🛡️ Generating trading signals... (5–10 seconds)")
+
+    try:
+        coin_data = cg.get_coins_markets(vs_currency='usd', ids=ticker)
+        if not coin_data:
+            await update.message.reply_text(f"❌ No data found for {ticker.upper()}")
+            return
+
+        coin = coin_data[0]
+        price = coin['current_price']
+        change_24h = coin['price_change_percentage_24h']
+        volume = coin['total_volume']
+        high_24h = coin['high_24h']
+        low_24h = coin['low_24h']
+        rank = coin['market_cap_rank']
+
+        prompt = f"""
+        You are Cyntel AI: cynical, direct, zero hype.
+        Generate a trading signal for {ticker.upper()} right now.
+        Data:
+        - Current price: ${price:,.2f}
+        - 24h change: {change_24h:+.2f}%
+        - 24h high/low: ${high_24h:,.2f} / ${low_24h:,.2f}
+        - Volume: ${volume:,.0f}
+        - Market cap rank: #{rank}
+
+        Output format:
+        Signal: BUY / HOLD / SELL
+        Entry zone: [range or price]
+        Target: [1-2 levels]
+        Stop-loss: [price]
+        Risk/Reward: [ratio]
+        Rationale: 2-4 sentences, be brutally honest about risks, momentum, liquidity, etc.
+        No moon emojis, no shilling.
+        """
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=220,
+            temperature=0.65
+        )
+        signal_text = response.choices[0].message.content.strip()
+
+        message = (
+            f"🛡️ Cyntel Signals — {ticker.upper()}\n\n"
+            f"💰 Current: ${price:,.2f} ({change_24h:+.2f}% 24h)\n"
+            f"📈 High/Low 24h: ${high_24h:,.2f} / ${low_24h:,.2f}\n"
+            f"Volume: ${volume:,.0f}\n\n"
+            f"{signal_text}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Signals failed: {str(e)}")
+
 def main():
     print("Starting Cyntel AI bot...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -235,6 +300,7 @@ def main():
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("portfolio", portfolio))  # This line makes /portfolio work
     app.add_handler(CommandHandler("trending", trending))
+    app.add_handler(CommandHandler("signals", signals))
 
     print("Bot is online and ready!")
     app.run_polling()
