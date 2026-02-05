@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from pycoingecko import CoinGeckoAPI
-import openai
 from openai import OpenAI
 from moralis import evm_api
 
@@ -12,12 +11,19 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MORALIS_API_KEY = os.getenv("MORALIS_API_KEY")  # Required for portfolio
 
 if not TELEGRAM_TOKEN:
     print("ERROR: TELEGRAM_TOKEN not found")
     exit(1)
 
-openai.api_key = OPENAI_API_KEY
+if not OPENAI_API_KEY:
+    print("ERROR: OPENAI_API_KEY not found")
+    exit(1)
+
+if not MORALIS_API_KEY:
+    print("ERROR: MORALIS_API_KEY not found — /portfolio will fail")
+    # Don't exit here so the bot still runs, but warn
 
 # Initialize CoinGecko
 cg = CoinGeckoAPI()
@@ -28,8 +34,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Available commands:\n"
         "/price <ticker> — get current price & 24h change\n"
         "/scan <ticker> — deep analysis with AI insights\n"
+        "/portfolio <wallet> — track Base wallet holdings\n"
         "/help — show this message\n\n"
-        "Example: /price bitcoin or /scan ethereum"
+        "Example: /price bitcoin or /portfolio 0x1234...abcd"
     )
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -48,7 +55,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = info['usd']
         change_24h = info.get('usd_24h_change', 0)
         market_cap = info.get('usd_market_cap', 'N/A')
-
         change_emoji = "🟢" if change_24h > 0 else "🔴" if change_24h < 0 else "⚪"
 
         message = (
@@ -70,7 +76,6 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Analyzing... (this may take 5–10 seconds)")
 
     try:
-        # Get detailed market data
         coin_data = cg.get_coins_markets(vs_currency='usd', ids=ticker)
         if not coin_data:
             await update.message.reply_text(f"❌ No data found for {ticker.upper()}")
@@ -83,7 +88,6 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         market_cap = coin['market_cap']
         rank = coin['market_cap_rank']
 
-        # Build prompt for OpenAI
         prompt = f"""
         Analyze this cryptocurrency objectively and analytically:
         - Current price: ${price:,.2f}
@@ -95,16 +99,13 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Give a short, direct assessment (2–4 sentences). Be analytical. Include slight cynicism if the data shows red flags (e.g. low volume, extreme pump/dump). Do not shill or hype.
         """
 
-        # Modern OpenAI 1.x syntax
         client = OpenAI(api_key=OPENAI_API_KEY)
-
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=150,
             temperature=0.7
         )
-
         analysis = response.choices[0].message.content.strip()
 
         message = (
@@ -113,12 +114,13 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 Rank #{rank}   |   Volume ${volume:,.0f}\n\n"
             f"{analysis}"
         )
-
         await update.message.reply_text(message)
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ AI analysis failed: {str(e)}")
 
+# ────────────────────────────────────────────────
+# Portfolio function – correctly placed here (NOT indented inside scan)
 async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Please provide a Base wallet address.\nExample: /portfolio 0x1234...abcd")
@@ -129,13 +131,15 @@ async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         params = {"chain": "base", "address": wallet}
-        result = evm_api.token.get_wallet_token_balances(api_key=os.getenv("MORALIS_API_KEY"), params=params)
+        result = evm_api.token.get_wallet_token_balances(
+            api_key=os.getenv("MORALIS_API_KEY"),
+            params=params
+        )
 
         if not result:
             await update.message.reply_text(f"❌ No tokens found for {wallet}")
             return
 
-        # Get prices for tokens
         total_value = 0
         holdings = []
         for token in result:
@@ -155,23 +159,28 @@ async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass  # Skip if price not found
 
-        # Sort holdings by value
         holdings.sort(key=lambda x: x['value'], reverse=True)
 
-        # AI summary
-        prompt = f"Analyze this crypto portfolio: Total value $$   {total_value:,.2f}. Top holdings: {', '.join([f'{h['symbol']} (   $${h['value']:.2f})' for h in holdings[:5]])}. Give a short, direct assessment (2–4 sentences). Highlight risks like concentration or low liquidity."
+        prompt = f"Analyze this crypto portfolio: Total value ${total_value:,.2f}. Top holdings: {', '.join([f'{h['symbol']} (${h['value']:.2f})' for h in holdings[:5]])}. Give a short, direct assessment (2–4 sentences). Highlight risks like concentration or low liquidity."
+
         client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], max_tokens=150, temperature=0.7)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.7
+        )
         analysis = response.choices[0].message.content.strip()
 
         message = (
             f"💼 Portfolio for {wallet[:6]}...{wallet[-4:]}\n\n"
             f"📈 Total Value: ${total_value:,.2f}\n\n"
             f"Top Holdings:\n" + "\n".join([f"- {h['symbol']}: {h['amount']:.4f} (${h['value']:.2f})" for h in holdings[:5]]) + "\n\n"
-            f"🧠 AI Assessment: {analysis}"
+            f"🧠 AI Assessment:\n{analysis}"
         )
 
         await update.message.reply_text(message)
+
     except Exception as e:
         await update.message.reply_text(f"⚠️ Portfolio fetch failed: {str(e)}")
 
@@ -183,7 +192,7 @@ def main():
     app.add_handler(CommandHandler("price", price))
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("portfolio", portfolio))
+    app.add_handler(CommandHandler("portfolio", portfolio))  # This line makes /portfolio work
 
     print("Bot is online and ready!")
     app.run_polling()
