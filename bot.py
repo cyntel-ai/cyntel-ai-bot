@@ -5,6 +5,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from pycoingecko import CoinGeckoAPI
 import openai
 from openai import OpenAI
+from moralis import evm_api
 
 # Load environment variables
 load_dotenv()
@@ -118,6 +119,62 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ AI analysis failed: {str(e)}")
 
+async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Please provide a Base wallet address.\nExample: /portfolio 0x1234...abcd")
+        return
+
+    wallet = context.args[0].lower()
+    await update.message.reply_text("📂 Fetching portfolio... (this may take 5–10 seconds)")
+
+    try:
+        params = {"chain": "base", "address": wallet}
+        result = evm_api.token.get_wallet_token_balances(api_key=os.getenv("MORALIS_API_KEY"), params=params)
+
+        if not result:
+            await update.message.reply_text(f"❌ No tokens found for {wallet}")
+            return
+
+        # Get prices for tokens
+        total_value = 0
+        holdings = []
+        for token in result:
+            if token['balance'] == 0:
+                continue
+            ticker = token['symbol'].lower()
+            try:
+                data = cg.get_price(ids=ticker, vs_currencies='usd')
+                price = data.get(ticker, {}).get('usd', 0)
+                value = (int(token['balance']) / 10**token['decimals']) * price
+                total_value += value
+                holdings.append({
+                    'symbol': token['symbol'],
+                    'amount': int(token['balance']) / 10**token['decimals'],
+                    'value': value
+                })
+            except:
+                pass  # Skip if price not found
+
+        # Sort holdings by value
+        holdings.sort(key=lambda x: x['value'], reverse=True)
+
+        # AI summary
+        prompt = f"Analyze this crypto portfolio: Total value $$   {total_value:,.2f}. Top holdings: {', '.join([f'{h['symbol']} (   $${h['value']:.2f})' for h in holdings[:5]])}. Give a short, direct assessment (2–4 sentences). Highlight risks like concentration or low liquidity."
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], max_tokens=150, temperature=0.7)
+        analysis = response.choices[0].message.content.strip()
+
+        message = (
+            f"💼 Portfolio for {wallet[:6]}...{wallet[-4:]}\n\n"
+            f"📈 Total Value: ${total_value:,.2f}\n\n"
+            f"Top Holdings:\n" + "\n".join([f"- {h['symbol']}: {h['amount']:.4f} (${h['value']:.2f})" for h in holdings[:5]]) + "\n\n"
+            f"🧠 AI Assessment: {analysis}"
+        )
+
+        await update.message.reply_text(message)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Portfolio fetch failed: {str(e)}")
+
 def main():
     print("Starting Cyntel AI bot...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -126,6 +183,7 @@ def main():
     app.add_handler(CommandHandler("price", price))
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("help", start))
+    app.add_handler(CommandHandler("portfolio", portfolio))
 
     print("Bot is online and ready!")
     app.run_polling()
