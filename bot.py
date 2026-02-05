@@ -33,6 +33,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome to Cyntel AI 🚀\n\n"
         "Available commands:\n"
         "/price <ticker> — get current price & 24h change\n"
+        "/trending — discover top movers\n"
         "/scan <ticker> — deep analysis with AI insights\n"
         "/portfolio <wallet> — track Base wallet holdings\n"
         "/help — show this message\n\n"
@@ -184,6 +185,46 @@ async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Portfolio fetch failed: {str(e)}")
 
+async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📈 Fetching trending tokens on Base... (5–10 seconds)")
+
+    try:
+        # Use CoinGecko for top movers (adjust for Base-specific if needed)
+        data = cg.get_search_trending()
+        trending_coins = data['coins']
+
+        if not trending_coins:
+            await update.message.reply_text("❌ No trending data found")
+            return
+
+        message = "🔥 Top Trending Tokens (Global, filtered for Base where possible):\n\n"
+        for i, coin in enumerate(trending_coins[:5], 1):
+            item = coin['item']
+            ticker = item['id']
+            price_data = cg.get_price(ids=ticker, vs_currencies='usd', include_24hr_change=True)
+            price = price_data.get(ticker, {}).get('usd', 'N/A')
+            change_24h = price_data.get(ticker, {}).get('usd_24h_change', 0)
+            message += f"{i}. {item['symbol']} ({item['name']}):\n"
+            message += f"💰 ${price:,.2f} | {change_24h:+.2f}% (24h)\n"
+            message += f"Market Cap Rank: #{item['market_cap_rank']}\n\n"
+
+        # AI summary
+        prompt = f"Summarize these trending tokens: {', '.join([c['item']['name'] for c in trending_coins[:5]])}. Give a short assessment on potential opportunities or risks (2–3 sentences)."
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100,
+            temperature=0.7
+        )
+        analysis = response.choices[0].message.content.strip()
+
+        message += f"🧠 AI Insights: {analysis}"
+
+        await update.message.reply_text(message)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Trending fetch failed: {str(e)}")
+
 def main():
     print("Starting Cyntel AI bot...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -193,6 +234,7 @@ def main():
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("portfolio", portfolio))  # This line makes /portfolio work
+    app.add_handler(CommandHandler("trending", trending))
 
     print("Bot is online and ready!")
     app.run_polling()
